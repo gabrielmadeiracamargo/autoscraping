@@ -5,7 +5,6 @@ import chromedriver_autoinstaller
 import undetected_chromedriver as uc
 import re
 import os
-import git
 import time
 import random
 import threading
@@ -57,83 +56,6 @@ def signal_handler(signum, frame):
     print(f"Sinal recebido: {signum}. Encerrando...")
     cleanup()
     sys.exit(0)
-
-REPO_OWNER = "gabrielmadeiracamargo"
-REPO_NAME = "autoscraping" 
-CURRENT_VERSION = "1.0.0"  # Versão atual do programa compilado
-
-def get_latest_release():
-    """
-    Consulta o release mais recente do repositório no GitHub.
-    Retorna um dicionário com as informações do release.
-    """
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-    response = requests.get(url)
-    
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Erro ao consultar o GitHub API: {response.status_code}")
-        return None
-
-def download_latest_release(asset_url, output_path):
-    headers = {"Accept": "application/octet-stream"}
-    response = requests.get(asset_url, headers=headers, stream=True)
-    
-    if response.status_code == 200:
-        with open(output_path, "wb") as f:
-            shutil.copyfileobj(response.raw, f)
-        print(f"Arquivo baixado para: {output_path}")
-    else:
-        print(f"Erro ao baixar o release: {response.status_code}")
-
-def update_program():
-    """
-    Verifica se há uma nova versão disponível nos releases do GitHub.
-    Se houver, baixa e substitui o executável atual.
-    """
-    release_info = get_latest_release()
-    if not release_info:
-        return False
-
-    latest_version = release_info["tag_name"]
-    if latest_version == CURRENT_VERSION:
-        print("Você já está usando a versão mais recente.")
-        return False
-
-    print(f"Nova versão encontrada: {latest_version}")
-    
-    # Identifica o arquivo correto para o sistema operacional
-    system_name = platform.system().lower()
-    for asset in release_info["assets"]:
-        if system_name in asset["name"]:
-            asset_url = asset["browser_download_url"]
-            break
-    else:
-        print("Nenhum arquivo compatível encontrado para este sistema operacional.")
-        return False
-
-    # Caminho para o novo arquivo baixado
-    output_path = os.path.join(os.path.dirname(sys.executable), "main_new.exe")
-
-    # Baixa o novo arquivo
-    download_latest_release(asset_url, output_path)
-
-    # Substitui o executável atual
-    current_path = sys.executable
-    backup_path = current_path + ".bak"
-
-    try:
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
-        os.rename(current_path, backup_path)
-        os.rename(output_path, current_path)
-        print("Programa atualizado com sucesso.")
-    except Exception as e:
-        print(f"Erro ao atualizar o programa: {e}")
-        return False
-
-    return True
 
 def restart_program():
     """
