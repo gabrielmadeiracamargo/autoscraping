@@ -24,26 +24,124 @@ from webdriver_manager.chrome import ChromeDriverManager
 from openpyxl.styles import PatternFill, Alignment, Font
 from openpyxl.utils import get_column_letter
 from selenium.webdriver.common.keys import Keys
+import os
+import sys
+import requests
+import shutil
+import platform
+import subprocess
+import atexit
+import signal
+from swiftshadow import QuickProxy
+print(QuickProxy())
 
-REPO_URL = "https://github.com/gabrielmadeiracamargo/autoscraping.git"
-LOCAL_PATH = os.path.join(os.getcwd(), "codigo_atualizado") 
+driver = None
+threads = []
 
-def update_repository(repo_url, local_path):
-    try:
-        if os.path.exists(local_path):
-            # Repositório já existe, puxa as atualizações
-            repo = git.Repo(local_path)
-            origin = repo.remotes.origin
-            origin.pull()
-            print("Repositório atualizado com sucesso.")
-        else:
-            # Clona o repositório se ele não existe localmente
-            git.Repo.clone_from(repo_url, local_path)
-            print("Repositório clonado com sucesso.")
-        return True
-    except Exception as e:
-        print(f"Erro ao atualizar o repositório: {e}")
+def cleanup():
+    """Função de limpeza para encerrar processos e liberar recursos."""
+    global driver, threads
+    if driver:
+        try:
+            driver.quit()
+            print("Driver encerrado com sucesso.")
+        except WebDriverException as e:
+            print(f"Erro ao encerrar o driver: {e}")
+    for thread in threads:
+        if thread.is_alive():
+            thread.join(timeout=1)
+            print(f"Thread {thread.name} encerrada.")
+
+def signal_handler(signum, frame):
+    """Manipulador para sinais do sistema."""
+    print(f"Sinal recebido: {signum}. Encerrando...")
+    cleanup()
+    sys.exit(0)
+
+REPO_OWNER = "gabrielmadeiracamargo"
+REPO_NAME = "autoscraping" 
+CURRENT_VERSION = "1.0.0"  # Versão atual do programa compilado
+
+def get_latest_release():
+    """
+    Consulta o release mais recente do repositório no GitHub.
+    Retorna um dicionário com as informações do release.
+    """
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Erro ao consultar o GitHub API: {response.status_code}")
+        return None
+
+def download_latest_release(asset_url, output_path):
+    headers = {"Accept": "application/octet-stream"}
+    response = requests.get(asset_url, headers=headers, stream=True)
+    
+    if response.status_code == 200:
+        with open(output_path, "wb") as f:
+            shutil.copyfileobj(response.raw, f)
+        print(f"Arquivo baixado para: {output_path}")
+    else:
+        print(f"Erro ao baixar o release: {response.status_code}")
+
+def update_program():
+    """
+    Verifica se há uma nova versão disponível nos releases do GitHub.
+    Se houver, baixa e substitui o executável atual.
+    """
+    release_info = get_latest_release()
+    if not release_info:
         return False
+
+    latest_version = release_info["tag_name"]
+    if latest_version == CURRENT_VERSION:
+        print("Você já está usando a versão mais recente.")
+        return False
+
+    print(f"Nova versão encontrada: {latest_version}")
+    
+    # Identifica o arquivo correto para o sistema operacional
+    system_name = platform.system().lower()
+    for asset in release_info["assets"]:
+        if system_name in asset["name"]:
+            asset_url = asset["browser_download_url"]
+            break
+    else:
+        print("Nenhum arquivo compatível encontrado para este sistema operacional.")
+        return False
+
+    # Caminho para o novo arquivo baixado
+    output_path = os.path.join(os.path.dirname(sys.executable), "main_new.exe")
+
+    # Baixa o novo arquivo
+    download_latest_release(asset_url, output_path)
+
+    # Substitui o executável atual
+    current_path = sys.executable
+    backup_path = current_path + ".bak"
+
+    try:
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        os.rename(current_path, backup_path)
+        os.rename(output_path, current_path)
+        print("Programa atualizado com sucesso.")
+    except Exception as e:
+        print(f"Erro ao atualizar o programa: {e}")
+        return False
+
+    return True
+
+def restart_program():
+    """
+    Reinicia o programa.
+    """
+    print("Reiniciando o programa...")
+    subprocess.Popen([sys.executable] + sys.argv)
+    sys.exit()
 
 # Função para delay aleatório
 def random_delay(min_time=1.5, max_time=4.0):
@@ -62,10 +160,13 @@ def initialize_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--ignore-certificate-errors")
 
+
     # Configura o Undetected Chromedriver
     driver_path = chromedriver_autoinstaller.install()
     driver = uc.Chrome(executable_path=driver_path, options=options, version_main=int(chromedriver_autoinstaller.get_chrome_version()[:3]))
     
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})") 
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.53 Safari/537.36'})
     # Configura stealth
     stealth(driver,
             languages=["en-US", "en"],
@@ -78,12 +179,73 @@ def initialize_driver():
             
     return driver
 
+import threading
+
+class MouseMover:
+    def __init__(self):
+        self.running = False
+        self.thread = None
+
+    def start(self):
+        """
+        Inicia uma thread separada para pequenas movimentações do mouse.
+        """
+        if not self.running:
+            self.running = True
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+
+    def stop(self):
+        """
+        Para a thread de movimentações do mouse.
+        """
+        self.running = False
+        if self.thread:
+            self.thread.join()
+
+    def _run(self):
+        """
+        Executa movimentações contínuas enquanto `self.running` for True.
+        """
+        while self.running:
+            small_mouse_movements(duration=0.5)  # Movimentação leve
+            time.sleep(random.uniform(2, 5))  # Intervalo aleatório entre as movimentações
+
+
 import ctypes
 from ctypes import wintypes
 
 # Estrutura POINT para capturar a posição do cursor
 class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+def small_mouse_movements(duration=0.5):
+    """
+    Realiza pequenas movimentações aleatórias do mouse em torno da posição atual.
+    """
+    try:
+        # Obtém a posição atual do cursor
+        current_pos = POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(current_pos))
+        start_x, start_y = current_pos.x, current_pos.y
+
+        # Gera deslocamentos aleatórios
+        offset_x = random.randint(-10, 10)  # Movimenta até 10px para esquerda/direita
+        offset_y = random.randint(-10, 10)  # Movimenta até 10px para cima/baixo
+
+        # Calcula a posição alvo
+        target_x = start_x + offset_x
+        target_y = start_y + offset_y
+
+        # Realiza a movimentação gradual
+        steps = max(5, int(duration * 30))  # Divide o movimento em passos menores
+        for i in range(steps + 1):
+            current_x = start_x + ((target_x - start_x) * i / steps)
+            current_y = start_y + ((target_y - start_y) * i / steps)
+            ctypes.windll.user32.SetCursorPos(int(current_x), int(current_y))
+            time.sleep(duration / steps)
+    except Exception as e:
+        print(f"Erro durante pequenas movimentações do mouse: {e}")
 
 # Função corrigida para movimentação natural do mouse com maior velocidade
 def natural_mouse_movement(start_x, start_y, end_x, end_y, duration=0.5):
@@ -166,12 +328,14 @@ def simulate_mouse_movement_and_click(driver, element, duration=0.5):
     """Movimenta o mouse até o elemento e realiza o clique."""
     move_mouse_to_element(driver, element, duration)
     perform_click()
+    random_delay()
+    random_scroll(driver)  # Rolagem leve em cada contêiner de produto
 
 
 # Função para scroll aleatório durante a extração de dados
 def random_scroll(driver, min_scroll=100, max_scroll=300):
     scroll_amount = random.randint(min_scroll, max_scroll)
-    scroll_direction = random.choice([-1, 1])
+    scroll_direction = random.choice([0, 1])
     driver.execute_script(f"window.scrollBy(0, {scroll_direction * scroll_amount});")
     time.sleep(random.uniform(0.5, 1.5))
 
@@ -206,48 +370,66 @@ def has_results(driver, log):
         return True
 
 def extract_wiper_info(driver, wait, sheet, car_info, log):
-    if not wait_for_search_completion(driver, log):
-        return False
+    """Extrai informações de palhetas e navega por todas as páginas disponíveis."""
+    page_number = 1
 
-    if not has_results(driver, log):
-        log("Nenhuma palheta encontrada. Nenhum arquivo será gerado.")
-        return False
+    while True:
+        log(f"Extraindo informações da página {page_number}...")
 
-    try:
-        wiper_containers = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//*[@data-testid='product-container']")))
-        log(f"{len(wiper_containers)} produtos de palhetas encontrados.")
-    except TimeoutException:
-        log("Erro ao carregar contêineres de palhetas: Tempo de espera excedido.")
-        return False
+        if not wait_for_search_completion(driver, log):
+            return False
 
-    for container in wiper_containers:
-        random_scroll(driver)  # Rolagem leve em cada contêiner de produto
+        if not has_results(driver, log):
+            log("Nenhuma palheta encontrada. Nenhum arquivo será gerado.")
+            return False
 
         try:
-            # Coleta de informações diretamente dos elementos sem mover o mouse
-            title_element = container.find_element(By.CLASS_NAME, 'product-title')
-            title_text = title_element.text
-            title_parts = title_text.split()
-            fabricante = title_parts[0]
+            wiper_containers = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//*[@data-testid='product-container']")))
+            log(f"{len(wiper_containers)} produtos de palhetas encontrados na página {page_number}.")
+        except TimeoutException:
+            log("Erro ao carregar contêineres de palhetas: Tempo de espera excedido.")
+            return False
 
-            polegada_match = re.search(r'(\d+(\.\d+)?)"? ?in', title_text)
-            polegada = polegada_match.group(1) if polegada_match else "N/A"
-            linha = title_text.replace(fabricante, '').replace(f'{polegada} in', '').strip()
+        # Extrai os dados da página atual
+        for container in wiper_containers:
+            random_scroll(driver)  # Rolagem leve em cada contêiner de produto
 
-            part_numbers = container.find_elements(By.XPATH, ".//div[@data-testid='product-part-number']")
-            prices = container.find_elements(By.XPATH, ".//div[@data-testid='price-container-dollars']")
+            try:
+                # Coleta de informações diretamente dos elementos
+                title_element = container.find_element(By.CLASS_NAME, 'product-title')
+                title_text = title_element.text
+                title_parts = title_text.split()
+                fabricante = title_parts[0]
 
-            for i in range(min(len(part_numbers), len(prices))):
-                codigo_fabricante = part_numbers[i].text.replace("Part ", "")
-                preco = format_price(prices[i].text.strip())
+                polegada_match = re.search(r'(\d+(\.\d+)?)"? ?in', title_text)
+                polegada = polegada_match.group(1) if polegada_match else "N/A"
+                linha = title_text.replace(fabricante, '').replace(f'{polegada} in', '').strip()
 
-                pos_element = container.find_element(By.ID, "notes")
-                posicao = pos_element.text.replace("Notes: ", "").split('.')[0].strip()
+                part_numbers = container.find_elements(By.XPATH, ".//div[@data-testid='product-part-number']")
+                prices = container.find_elements(By.XPATH, ".//div[@data-testid='price-container-dollars']")
 
-                sheet.append([car_info, fabricante, linha, polegada, codigo_fabricante, posicao, preco])
+                for i in range(min(len(part_numbers), len(prices))):
+                    codigo_fabricante = part_numbers[i].text.replace("Part ", "")
+                    preco = format_price(prices[i].text.strip())
 
-        except Exception as e:
-            log(f"Erro ao processar um contêiner de produto: {e}")
+                    pos_element = container.find_element(By.ID, "notes")
+                    posicao = pos_element.text.replace("Notes: ", "").split('.')[0].strip()
+
+                    sheet.append([car_info, fabricante, linha, polegada, codigo_fabricante, posicao, preco])
+
+            except Exception as e:
+                log(f"Erro ao processar um contêiner de produto: {e}")
+
+        # Verifica se o link "Próxima Página" está disponível
+        next_buttons = driver.find_elements(By.XPATH, "//a[@data-testid='page-button-next']")  # Lista de botões
+        if next_buttons and next_buttons[0].is_enabled():  # Verifica se o botão existe e está habilitado
+            log("Navegando para a próxima página...")
+            driver.execute_script("arguments[0].click();", next_buttons[0])  # Clique com JavaScript
+            page_number += 1
+            random_delay()  # Pequeno delay antes de iniciar a extração na nova página
+        else:
+            log("Não há mais páginas disponíveis.")
+            break
 
     return True
 
@@ -364,13 +546,15 @@ def start_scraping(year, make, model, engine, log):
 
     driver = initialize_driver()
 
+    mouse_mover = MouseMover()
+    mouse_mover.start()
+
     driver.get('https://www.autozone.com/ignition-tune-up-and-routine-maintenance/wiper-blade-windshield?recsPerPage=48')
 
     random_delay()
-    wait = WebDriverWait(driver, 10)
+    wait = WebDriverWait(driver, 2)
 
     try:
-        # Seleciona ano, marca e modelo
         select_year_make_model(driver, wait, year, make, model, log)
 
         # Seleciona o motor automaticamente ou manualmente
@@ -393,6 +577,7 @@ def start_scraping(year, make, model, engine, log):
         return False
 
     finally:
+        mouse_mover.stop()
         driver.quit()
 
     return True
@@ -459,7 +644,10 @@ class ScrapingApp:
             self.current_label.config(text="Informe o modelo:")
             self.helper_label.set_html(
                 "Quando o site abrir, aperte F11 para deixar em tela cheia. "
-                "Tente não mexer o mouse nem clicar em nada. O programa selecionará automaticamente."
+                "Mexa um pouco o mouse mas não clique em nada. O programa selecionará automaticamente. "
+                "Quando terminar, o programa vai voltar à tela. "
+                "O tempo até terminar a extração depende da quantidade de palhetas. "
+                "Se aparecer algum aviso de promoção cobrindo a tela, feche."
             )
             self.current_stage = 3
 
@@ -539,9 +727,16 @@ if __name__ == "__main__":
 
 # Função principal
 def main():
-    root = tk.Tk()
-    app = ScrapingApp(root)
-    root.mainloop()
+    global driver
+    try:
+        root = tk.Tk()
+        app = ScrapingApp(root)
+        root.mainloop()
+    finally:
+        cleanup()
 
 if __name__ == '__main__':
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     main()
