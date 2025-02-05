@@ -7,7 +7,7 @@ O site a ser extraído é o Autozone, famosa loja de peças de carro no exterior
 
 Por favor, note que a estrutura do site é alterada periodicamente. Logo, o programa fica eventual e inevitavelmente obsoleto a não ser que as classes e IDs sejam atualizadas para corresponder às atuais usadas no site. Sinta-se livre para corrigir e/ou melhorar o projeto se quiser.
 
-![Preview1](./img1.PNG)
+![Preview1](./img1.png)
 
 ## Instalação
 
